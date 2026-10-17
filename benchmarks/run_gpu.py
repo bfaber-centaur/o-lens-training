@@ -123,7 +123,6 @@ def main() -> int:
             failures[layer] = rc
             print(f"L{layer}: exit={rc}", flush=True)
     finally:
-        stop_children()
         for p in processes.values():
             if p.poll() is None:
                 try:
