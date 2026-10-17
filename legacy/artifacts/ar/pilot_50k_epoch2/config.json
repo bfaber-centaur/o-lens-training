@@ -1,0 +1,22 @@
+{
+  "model_id": "Qwen/Qwen3.5-4B",
+  "target_layer": 30,
+  "d_model": 2560,
+  "train_pairs": 45952,
+  "val_pairs": 4992,
+  "split_seed": 42,
+  "micro_batch": 32,
+  "grad_accum": 8,
+  "effective_batch": 256,
+  "lr": 0.0001,
+  "warmup_steps": 10,
+  "global_step": 360,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "lora_targets": "all-linear",
+  "span_min": 1,
+  "span_max": 32,
+  "pilot_overlap_note": "Pilot corpus samples spans independently within rollout; spans may overlap. Train/val split is rollout-disjoint.",
+  "whitener_path": "/workspace/o-lens-qwen35-4b/ar/whitener_l30.safetensors"
+}

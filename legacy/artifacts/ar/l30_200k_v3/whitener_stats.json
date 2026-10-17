@@ -1,0 +1,11 @@
+{
+  "n_train": 180732,
+  "eigen_min": 0.028700667322852213,
+  "eigen_p01": 0.15367237631635752,
+  "eigen_median": 0.5385004227145608,
+  "eigen_mean": 0.9239408812624703,
+  "eigen_max": 60.09455859314706,
+  "condition_number": 2093.838373761373,
+  "max_whitened_diag_error": 6.217248937900877e-15,
+  "max_whitened_offdiag": 5.862082408974044e-14
+}

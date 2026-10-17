@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+.zed/
+
+# Training artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.gguf
+
+# Large datasets and activation caches
+data/
+datasets/
+activations/
+cache/
+.cache/
+hf_cache/
+
+# Training outputs
+checkpoints/
+outputs/
+wandb/
+tensorboard/
+lightning_logs/
+runs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
