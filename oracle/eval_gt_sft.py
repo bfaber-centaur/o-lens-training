@@ -29,8 +29,8 @@ def validation_indices(corpus, meta):
     split = {"train": [], "val": []}
     for i in corpus.val_indices.tolist():
         split[oracle_partition(corpus.shard_ids[i], corpus.rollout_ids[i], meta["seed"], 0.2)].append(i)
-    for kind, limit in (("train", meta["training"]["max_train"]),
-                        ("val", meta["training"]["max_val"])):
+    for kind, limit in (("train", meta["training"].get("max_train", 2048)),
+                        ("val", meta["training"].get("max_val", 256))):
         rng.shuffle(split[kind])
         split[kind] = split[kind][:limit]
         actual = hashlib.sha256(json.dumps(split[kind]).encode()).hexdigest()
