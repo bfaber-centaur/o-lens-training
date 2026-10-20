@@ -20,7 +20,7 @@ class Crops(Dataset):
     def __getitem__(self,i):
         # Same tuple schema expected by ARCollator.
         crop=self.ids[i,:int(self.lengths[i])].long()
-        return torch.cat((self.tag,crop)), torch.zeros(2560), int(len(self.tag)+len(crop))
+        return {"input_ids":torch.cat((self.tag,crop)), "target":torch.zeros(2560)}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
