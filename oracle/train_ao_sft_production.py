@@ -117,7 +117,7 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
-    args.output.mkdir(parents=True)
+    args.output.mkdir(parents=True, exist_ok=args.resume)
     if not (args.pool / "COMPLETE").is_file() or not (args.arout / "COMPLETE").is_file():
         ap.error("Incomplete fresh AO pool or AR-output cache")
     pool_meta = json.loads((args.pool / "meta.json").read_text())
