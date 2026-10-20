@@ -41,9 +41,9 @@ def create_pool(rollouts,pairs,tokenizer,seed=42,val_fraction=.1,max_per_conv=4)
         with path.open(encoding="utf-8") as f:
             for line in f:
                 row=json.loads(line)
-                if "output_ids" not in row or not isinstance(row["output_ids"],list):
-                    raise ValueError(f"{path}: rollout missing output_ids; cannot construct fresh AO windows")
-                ids=row["output_ids"]
+                ids=row.get("assistant_ids",row.get("output_ids"))
+                if not isinstance(ids,list) or not all(isinstance(t,int) for t in ids):
+                    raise ValueError(f"{path}: missing assistant_ids/output_ids token list; cannot construct fresh AO windows")
                 counts["rollouts"]+=1
                 blocks=list(range(len(ids)//64))
                 rng.shuffle(blocks)
