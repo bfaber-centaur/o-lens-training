@@ -10,7 +10,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import random
 import sys
 from pathlib import Path
@@ -223,6 +222,8 @@ def main():
             raise RuntimeError("Refusing to overwrite checkpoint")
         staging.mkdir(parents=True)
         model.save_pretrained(staging / "lora")
+        tokenizer.save_pretrained(staging / "tokenizer")
+        (staging / "meta.json").write_text(json.dumps(meta, indent=2)+"\n")
         torch.save({"optimizer": optim.state_dict(), "step": step,
                     "torch_rng": torch.get_rng_state(),
                     "cuda_rng": torch.cuda.get_rng_state_all()}, staging / "state.pt")
