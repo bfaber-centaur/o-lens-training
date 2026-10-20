@@ -86,6 +86,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--layer", type=int, default=26)
     ap.add_argument("--arout", type=Path, required=True)
+    ap.add_argument("--pool", type=Path, required=True)
     ap.add_argument("--model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--revision", default=None)
     ap.add_argument("--data", type=Path, default=Path("/workspace/o-lens-qwen35-4b/data/olens_200k_all32"))
@@ -95,7 +96,7 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=4)
-    ap.add_argument("--max-span-tokens", type=int, default=32)
+    ap.add_argument("--max-span-tokens", type=int, default=64)
     ap.add_argument("--max-train", type=int, default=12000)
     ap.add_argument("--max-val", type=int, default=1024)
     ap.add_argument("--alpha", type=float, default=8000.0)
@@ -117,41 +118,29 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     args.output.mkdir(parents=True)
-    data_args = argparse.Namespace(layer=args.layer, pair_dir=args.data / "pairs",
-                                   rollout_dir=args.data / "rollouts", pair_glob=None,
-                                   rollout_glob="rollouts_*.jsonl", split_seed=42, val_frac=0.10)
-    corpus = load_corpus(data_args)
-    if not (args.arout / "COMPLETE").is_file():
-        ap.error("Incomplete AR-output cache")
+    if not (args.pool / "COMPLETE").is_file() or not (args.arout / "COMPLETE").is_file():
+        ap.error("Incomplete fresh AO pool or AR-output cache")
+    pool_meta = json.loads((args.pool / "meta.json").read_text())
     armeta = json.loads((args.arout / "meta.json").read_text())
-    if armeta["model"] != args.model or armeta["layer"] != args.layer or armeta["seed"] != args.seed:
-        ap.error("AR-output cache model/layer/seed mismatch")
-    if armeta["max_train"] != args.max_train or armeta["max_val"] != args.max_val:
-        ap.error("AR-output cache split size mismatch")
+    if pool_meta.get("format") != "fresh_ao_pool_v1" or armeta.get("format") != "fresh_ao_arout_v1":
+        ap.error("Production AO SFT requires fresh pool format; pilot cache prohibited")
+    if pool_meta["model"] != args.model or armeta["model"] != args.model or armeta["layer"] != args.layer:
+        ap.error("Model/layer mismatch")
+    if armeta["pool_sha256"] != pool_meta["pool_sha256"] or Path(armeta["pool"]).resolve() != args.pool.resolve():
+        ap.error("AR outputs built against a different AO pool")
+    pool_path = args.pool / "pool.safetensors"
     arout_path = args.arout / "arout.safetensors"
+    if hashlib.sha256(pool_path.read_bytes()).hexdigest() != pool_meta["pool_sha256"]:
+        ap.error("AO pool checksum mismatch")
     if hashlib.sha256(arout_path.read_bytes()).hexdigest() != armeta["arout_sha256"]:
-        ap.error("AR-output file SHA mismatch")
+        ap.error("AR-output checksum mismatch")
+    pool = load_file(str(pool_path))
     arout = load_file(str(arout_path))
-    rng = random.Random(args.seed)
-    split = {"train": [], "val": []}
-    # AR held-out rows only; a single rollout cannot cross oracle train/val.
-    for i in corpus.val_indices.tolist():
-        k = oracle_partition(corpus.shard_ids[i], corpus.rollout_ids[i], args.seed, 0.2)
-        split[k].append(i)
-    if not split["train"] or not split["val"]:
-        raise RuntimeError("oracle split empty")
-    for k, limit in [("train", args.max_train), ("val", args.max_val)]:
-        rng.shuffle(split[k])
-        split[k] = split[k][:limit]
-    for part in ("train", "val"):
-        digest = hashlib.sha256(json.dumps(split[part]).encode()).hexdigest()
-        if digest != armeta["splits"][part]["indices_sha256"]:
-            raise RuntimeError(f"{part} split mismatch against AR output cache")
-        if tuple(arout[part].shape) != (len(split[part]), corpus.d_model):
-            raise RuntimeError(f"{part} AR-output shape mismatch")
-    train_rollouts = {(int(corpus.shard_ids[i]), int(corpus.rollout_ids[i])) for i in split["train"]}
-    val_rollouts = {(int(corpus.shard_ids[i]), int(corpus.rollout_ids[i])) for i in split["val"]}
-    assert train_rollouts.isdisjoint(val_rollouts)
+    for kind in ("train", "val"):
+        if len(pool[kind+"_ids"]) != len(arout[kind]) or len(arout[kind]) != pool_meta[kind+"_rows"]:
+            ap.error(f"{kind} row count mismatch")
+    if args.max_span_tokens < 64:
+        ap.error("AO pool uses lengths through 64; set --max-span-tokens >=64")
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -162,7 +151,7 @@ def main():
     base = AutoModelForCausalLM.from_pretrained(args.model, revision=args.revision,
                                                  dtype=torch.bfloat16).to(device)
     base.config.use_cache = False
-    if base.get_input_embeddings().weight.shape[1] != corpus.d_model:
+    if base.get_input_embeddings().weight.shape[1] != arout["train"].shape[1]:
         raise RuntimeError("dimension mismatch for direct soft-token injection")
     lora = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none",
                       task_type="CAUSAL_LM", target_modules="all-linear")
@@ -177,34 +166,33 @@ def main():
     model.train()
     prompt_ids = torch.tensor(prompt_ids, device=device)
     collator = lambda rows: collate(rows, tokenizer.pad_token_id, tokenizer.eos_token_id)
-    class AROutDataset(SpanDataset):
-        def __init__(self, corpus, indices, vectors, max_span_tokens):
-            super().__init__(corpus, indices, max_span_tokens)
-            self.vectors = vectors
+    class FreshDataset(Dataset):
+        def __init__(self, split):
+            self.ids = pool[split+"_ids"]
+            self.lengths = pool[split+"_lengths"]
+            self.vectors = arout[split]
+        def __len__(self):
+            return len(self.vectors)
         def __getitem__(self, j):
-            _, ids = super().__getitem__(j)
-            return self.vectors[j], ids
-
-    train_loader = DataLoader(AROutDataset(corpus, split["train"], arout["train"], args.max_span_tokens),
-                              batch_size=args.batch_size, shuffle=True, collate_fn=collator)
-    val_loader = DataLoader(AROutDataset(corpus, split["val"], arout["val"], args.max_span_tokens),
-                            batch_size=args.batch_size, shuffle=False, collate_fn=collator)
+            return self.vectors[j], self.ids[j,:int(self.lengths[j])].long()
+    train_ds = FreshDataset("train")
+    val_ds = FreshDataset("val")
+    val_loader = DataLoader(val_ds,batch_size=args.batch_size,shuffle=False,collate_fn=collator)
     optim = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
-    meta = dict(stage="l26_ao1_arout_sft_pilot", layer=args.layer, model=args.model,
+    meta = dict(stage="l26_ao_sft_fresh_pool_v1", layer=args.layer, model=args.model,
+                pool_source=str(args.pool), pool_sha256=pool_meta["pool_sha256"],
                 arout_source=str(args.arout), arout_sha256=armeta["arout_sha256"],
                 ar_checkpoint=armeta["checkpoint"],
                 revision=args.revision or getattr(base.config, "_commit_hash", None),
                 prompt=PROMPT, prompt_slot="last token of rendered prompt",
-                source="frozen_AR_of_span_on_AR_heldout_rollouts",
+                source="frozen_AR_of_fresh_nonoverlap_AO_crops",
                 transform="unit", alpha=args.alpha,
-                partition=SPLIT_VERSION, seed=args.seed,
-                train_indices_sha256=hashlib.sha256(json.dumps(split["train"]).encode()).hexdigest(),
-                val_indices_sha256=hashlib.sha256(json.dumps(split["val"]).encode()).hexdigest(),
-                train_rows=len(split["train"]), val_rows=len(split["val"]),
-                training=dict(max_steps=args.max_steps, batch_size=args.batch_size,
-                              grad_accum=args.grad_accum, lr=args.lr, max_span_tokens=args.max_span_tokens,
-                              max_train=args.max_train, max_val=args.max_val),
-                eval_status="pilot_validation_only_not_independent_test")
+                partition="fresh_AO_rollout_conversation_hash_v1", seed=args.seed,
+                train_rows=len(train_ds), val_rows=len(val_ds),
+                training=dict(max_steps=args.max_steps, save_every=args.save_every,
+                              batch_size=args.batch_size, grad_accum=args.grad_accum,
+                              lr=args.lr, max_span_tokens=args.max_span_tokens),
+                eval_status="fresh_AO_validation_not_independent_final")
     if args.resume:
         prior = json.loads((args.output / "meta.json").read_text())
         if prior != meta:
@@ -214,7 +202,6 @@ def main():
 
     # Each optimizer step owns its deterministic sample schedule. Interrupted and
     # resumed jobs use identical rows, without fragile DataLoader iterator state.
-    train_ds = AROutDataset(corpus, split["train"], arout["train"], args.max_span_tokens)
     def checkpoint(step, metrics):
         final = args.output / "checkpoints" / f"step_{step:06d}"
         staging = args.output / "checkpoints" / f".step_{step:06d}.partial"
