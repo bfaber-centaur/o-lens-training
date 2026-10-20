@@ -195,8 +195,16 @@ def main():
                 eval_status="fresh_AO_validation_not_independent_final")
     if args.resume:
         prior = json.loads((args.output / "meta.json").read_text())
-        if prior != meta:
-            ap.error("Resume metadata differs; includes model, corpus, scale, schedule and hashes")
+        immutable_prior = json.loads(json.dumps(prior))
+        immutable_new = json.loads(json.dumps(meta))
+        immutable_prior["training"].pop("max_steps")
+        immutable_new["training"].pop("max_steps")
+        if immutable_prior != immutable_new:
+            ap.error("Resume metadata differs in an immutable training/data contract")
+        if args.max_steps < prior["training"]["max_steps"]:
+            ap.error("Cannot lower the original step target on resume")
+        # Preserve the original run metadata and all completed checkpoint contracts.
+        meta = prior
     else:
         (args.output / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
