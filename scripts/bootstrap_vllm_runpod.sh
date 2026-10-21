@@ -2,13 +2,27 @@
 # Separate vLLM inference venv. DO NOT overwrite the working HF/PEFT SFT venv.
 # Intended image: runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404.
 set -euo pipefail
-export UV_CACHE_DIR=/root/.cache/uv
+# Use dedicated local cache/tmp paths: uv wheel extraction needs chmod,
+# which fails on /workspace's geesefs mount.
+export UV_CACHE_DIR="${OLENS_UV_CACHE_DIR:-/root/olens-uv-cache}"
 export UV_LINK_MODE=copy
-export TMPDIR=/root/tmp
+export TMPDIR="${OLENS_TMPDIR:-/root/olens-vllm-tmp}"
 export HF_HOME=/root/.cache/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export XDG_CACHE_HOME=/root/.cache
 mkdir -p "$UV_CACHE_DIR" "$TMPDIR" "$HF_HUB_CACHE"
+for dir in "$UV_CACHE_DIR" "$TMPDIR" "$HF_HUB_CACHE"; do
+  resolved="$(realpath "$dir")"
+  case "$resolved" in
+    /root/*) ;;
+    *) echo "Refusing non-local package cache/tmp path: $dir -> $resolved" >&2; exit 1 ;;
+  esac
+  fstype="$(stat -f -c %T "$resolved")"
+  case "$fstype" in
+    fuse*) echo "Refusing FUSE-backed package path: $resolved ($fstype)" >&2; exit 1 ;;
+  esac
+  echo "local path: $resolved ($fstype)"
+done
 if [[ "$EUID" -ne 0 ]]; then
   echo "Run inside the RunPod container as root" >&2
   exit 1
@@ -18,6 +32,12 @@ if [[ -d /root/olens-vllm-venv && ! -x /root/olens-vllm-venv/bin/python ]]; then
   exit 1
 fi
 command -v uv >/dev/null || python3 -m pip install uv
+actual_uv_cache="$(uv cache dir)"
+if [[ "$(realpath "$actual_uv_cache")" != "$(realpath "$UV_CACHE_DIR")" ]]; then
+  echo "uv chose unexpected cache: $actual_uv_cache (expected $UV_CACHE_DIR)" >&2
+  exit 1
+fi
+echo "Verified uv cache: $actual_uv_cache"
 if [[ ! -x /root/olens-vllm-venv/bin/python ]]; then
   uv venv --python 3.12 /root/olens-vllm-venv
 fi
