@@ -4,15 +4,18 @@ No vLLM installation or GPU required; the actual engine is imported lazily.
 """
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import torch
 
 from oracle.sample_distill_teacher_vllm import (
-    shard_bounds, inject_prompt, sample_chunk, contract, materialize_requests
+    shard_bounds, inject_prompt, sample_chunk, contract, materialize_requests,
+    configure_vllm_multiprocessing
 )
 
 
@@ -31,6 +34,14 @@ class FakeEngine:
 
 
 class VLLMBulkTests(unittest.TestCase):
+    def test_cuda_safe_spawn_enforced_before_engine_init(self):
+        with patch.dict(os.environ, {}, clear=True):
+            configure_vllm_multiprocessing()
+            self.assertEqual(os.environ["VLLM_WORKER_MULTIPROC_METHOD"], "spawn")
+        with patch.dict(os.environ, {"VLLM_WORKER_MULTIPROC_METHOD": "fork"}):
+            with self.assertRaisesRegex(RuntimeError, "requires .*spawn"):
+                configure_vllm_multiprocessing()
+
     def test_sharding_exact_cover(self):
         for n in (1,2,3,4,7):
             spans = [shard_bounds(11,21,n,i) for i in range(n)]
