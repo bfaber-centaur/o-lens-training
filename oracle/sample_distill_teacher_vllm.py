@@ -194,6 +194,24 @@ def main():
             p.error("Nonempty destination without manifest")
         atomic_json(destination,manifest)
     data=load_file(str(a.items/"items.safetensors"))
+    lo,hi=manifest["start"],manifest["start"]+manifest["count"]
+    if (a.output/"COMPLETE").is_file():
+        for i in range(lo,hi):
+            file=a.output/f"item_{i:06d}.json"
+            if not file.is_file():
+                raise RuntimeError(f"COMPLETE but missing item {i}")
+            saved=json.loads(file.read_text())
+            if (saved.get("item_idx")!=i or saved.get("split")!=a.split or
+                saved.get("pair_row")!=int(data[a.split+"_pair_rows"][i]) or
+                len(saved.get("samples",[]))!=a.n_samples):
+                raise RuntimeError(f"COMPLETE but inconsistent item {i}")
+        print("ALL ITEMS ALREADY COMPLETE; no vLLM engine start",flush=True)
+        return
+    # Verify every merged weight shard, not only the embedding shard, before
+    # bringing up the engine; vLLM must read exactly the audited merged model.
+    for filename,expected in mm["weights"].items():
+        if sha256(a.merged/filename)!=expected:
+            raise RuntimeError(f"Merged model weight SHA mismatch: {filename}")
     tokenizer=AutoTokenizer.from_pretrained(a.teacher/"tokenizer")
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token=tokenizer.eos_token
