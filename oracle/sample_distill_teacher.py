@@ -155,8 +155,12 @@ def main():
     tokenizer=AutoTokenizer.from_pretrained(args.teacher/"tokenizer")
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token=tokenizer.eos_token
+    # Explicit cache_dir avoids stale HF_HOME pointing to the FUSE volume.
+    # Override only if intentionally provisioning another local model cache.
+    model_cache = os.environ.get("OLENS_HF_CACHE_DIR", "/root/.cache/huggingface/hub")
     base=AutoModelForCausalLM.from_pretrained(teacher["model"],revision=teacher.get("revision"),
-                                             dtype=torch.bfloat16,device_map="cuda")
+                                             dtype=torch.bfloat16,device_map="cuda",
+                                             cache_dir=model_cache)
     base.config.use_cache=True
     model=PeftModel.from_pretrained(base,args.teacher/"lora",is_trainable=False).eval()
     check_adapter_live(model,args.teacher/"lora"/"adapter_model.safetensors")
