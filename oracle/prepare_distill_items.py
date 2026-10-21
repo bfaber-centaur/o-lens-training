@@ -18,6 +18,7 @@ from transformers import AutoTokenizer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "legacy"))
+sys.path.insert(0, str(ROOT / "oracle"))
 from train_ar import load_corpus  # noqa: E402
 from train_gt_sft import PROMPT  # noqa: E402
 
