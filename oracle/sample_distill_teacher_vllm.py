@@ -28,6 +28,16 @@ def sha256(path):
     return h.hexdigest()
 
 
+def configure_vllm_multiprocessing():
+    """Use CUDA-safe spawn; this CLI is protected by the __main__ guard."""
+    mode = os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    if mode != "spawn":
+        raise RuntimeError(
+            "This sampler requires VLLM_WORKER_MULTIPROC_METHOD=spawn "
+            "to prevent CUDA reinitialization in forked workers"
+        )
+
+
 def shard_bounds(start,count,n_shards,shard):
     if n_shards < 1 or not 0 <= shard < n_shards or count < n_shards:
         raise ValueError("Need 1 <= n_shards <= count and 0 <= shard < n_shards")
@@ -180,8 +190,11 @@ def main():
     if a.dry_run:
         print("DRY RUN: no model loaded or output created",flush=True)
         return
-    if not torch.cuda.is_available():
-        p.error("CUDA required for bulk teacher inference")
+    # Do not call torch.cuda.is_available() before launching vLLM. Depending
+    # on the PyTorch/runtime check, that can initialize CUDA in the parent
+    # and poison the default forked engine process. The engine itself checks
+    # the availability of a suitable CUDA device.
+    configure_vllm_multiprocessing()
     if not 0 < a.gpu_memory_utilization <= 1:
         p.error("GPU memory fraction must be in (0,1]")
     a.output.mkdir(parents=True,exist_ok=True)
