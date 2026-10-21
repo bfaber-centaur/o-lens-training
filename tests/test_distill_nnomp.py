@@ -1,4 +1,5 @@
 """CPU controls for L26 distillation's Agam-style within-item NNOMP."""
+import hashlib
 import unittest
 
 import torch
@@ -8,7 +9,9 @@ from oracle.select_distill_nnomp import candidates, nnls, nnomp
 
 class FakeTokenizer:
     def decode(self, ids, skip_special_tokens=True):
-        return " ".join(f"token{t}" for t in ids)
+        # Deterministic varied strings: repeating "token" triggers the real
+        # F1 character-4-gram loop filter and invalidates this dedup test.
+        return " ".join(hashlib.blake2b(str(t).encode(), digest_size=8).hexdigest() for t in ids)
 
 
 class NNOMPTests(unittest.TestCase):
@@ -41,6 +44,15 @@ class NNOMPTests(unittest.TestCase):
         self.assertEqual(len(c),6)
         self.assertEqual([r["len"] for r in c],[2,4,8,16,32,64])
         self.assertTrue(all(row["src"]==0 for row in c))
+
+    def test_repetitive_synthetic_text_is_filtered(self):
+        class RepetitiveTokenizer:
+            def decode(self, ids, skip_special_tokens=True):
+                return " ".join(f"token{t}" for t in ids)
+
+        ids = list(range(1, 100))
+        c = candidates([{"ids": ids}], RepetitiveTokenizer())
+        self.assertEqual([r["len"] for r in c], [2])
 
     def test_nonfinite_is_rejected(self):
         with self.assertRaisesRegex(ValueError,"Non-finite"):
