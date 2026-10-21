@@ -26,8 +26,13 @@ VLLM_VERSION=0.32.0
 VLLM_CUDA=129
 WHEEL="https://github.com/vllm-project/vllm/releases/download/v$VLLM_VERSION/vllm-$VLLM_VERSION+cu$VLLM_CUDA-cp38-abi3-manylinux_2_28_x86_64.whl"
 echo "Installing pinned vLLM $VLLM_VERSION cu$VLLM_CUDA in isolated venv"
+# uv prioritizes extra indexes for *all* names. The PyTorch index also
+# publishes stale copies of ordinary packages (e.g. requests==2.28.1),
+# making unrelated vLLM dependencies unsatisfiable. --torch-backend uses
+# that index only for PyTorch ecosystem packages; PyPI remains the normal
+# source for everything else. Avoid unsafe-best-match / dependency confusion.
 uv pip install --python /root/olens-vllm-venv/bin/python "$WHEEL" \
-  --extra-index-url "https://download.pytorch.org/whl/cu$VLLM_CUDA"
+  --torch-backend="cu$VLLM_CUDA"
 uv pip check --python /root/olens-vllm-venv/bin/python
 /root/olens-vllm-venv/bin/python - <<'PY'
 import torch, transformers, vllm, safetensors
