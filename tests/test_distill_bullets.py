@@ -39,6 +39,51 @@ class BulletAssemblyTests(unittest.TestCase):
         self.assertEqual(reject_reason(p,100),"ngram_loop")
         p[1]="- A bullet inside a bullet."
         self.assertEqual(reject_reason(p,100),"bullet_collision")
+    def test_no_unigram_policy_ignores_function_word_frequency(self):
+        p=list(self.good)
+        p[0]="A traveler saw a mountain beyond a forest."
+        self.assertEqual(reject_reason(p,100),"ngram_loop")
+        self.assertEqual(reject_reason(p,100,filter_policy="no_unigram"),"")
+        self.assertTrue(ngram_loop(p[0]))
+        self.assertFalse(ngram_loop(p[0],min_n=2))
+
+    def test_no_unigram_still_rejects_actual_multiword_loop(self):
+        p=list(self.good)
+        p[0]="red green red green red green"
+        self.assertEqual(reject_reason(p,100,filter_policy="no_unigram"),
+                         "ngram_loop")
+
+    def test_no_unigram_preserves_other_quality_filters(self):
+        p=list(self.good)
+        p[0]="A traveler saw a mountain beyond a forest."
+        self.assertEqual(reject_reason(p[:3],100,filter_policy="no_unigram"),
+                         "n_sel!=4")
+        p[1]="- An embedded bullet."
+        self.assertEqual(reject_reason(p,100,filter_policy="no_unigram"),
+                         "bullet_collision")
+        with self.assertRaisesRegex(ValueError,"Unknown assembly filter policy"):
+            reject_reason(p,100,filter_policy="unknown")
+
+    def test_alternative_assembly_audits_upstream_counterfactual(self):
+        picks=list(self.good)
+        picks[0]="A traveler saw a mountain beyond a forest."
+        selection={"split":"train","rows":[{
+            "item_idx":0,"n_candidates":100,
+            "omp_sel":[{"len":16+i*8,"text":t} for i,t in enumerate(picks)]
+        }]}
+        bank={"train_vec":torch.ones(1,4),
+              "train_pair_rows":torch.tensor([777])}
+        strict,strict_audit=assemble(selection,bank,DummyTokenizer())
+        relaxed,relaxed_audit=assemble(selection,bank,DummyTokenizer(),
+                                      filter_policy="no_unigram")
+        self.assertEqual(len(strict),0)
+        self.assertEqual(strict_audit[0]["reason"],"ngram_loop")
+        self.assertEqual(len(relaxed),1)
+        self.assertEqual(relaxed_audit[0]["reason"],"accepted")
+        self.assertEqual(relaxed_audit[0]["upstream_reason"],"ngram_loop")
+        self.assertTrue(torch.equal(relaxed[0]["vec"],bank["train_vec"][0]))
+        self.assertEqual(relaxed[0]["src_pair_row"],777)
+
     def test_requires_four_and_sufficient_candidates(self):
         self.assertEqual(reject_reason(self.good,24),"n_cand<25")
         self.assertEqual(reject_reason(self.good[:3],100),"n_sel!=4")
