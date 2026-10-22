@@ -367,7 +367,7 @@ def run(a,m,bank,sel,rows,mean,W,tok,cfg,out,fingerprint):
                 scores[arm] = {**score_vectors(raw,true,mean,W),'parser':parsed_arm}
                 if arm in r['outputs']:
                     scores[arm].update({k:r['outputs'][arm][k] for k in ('eos','hit_cap','tokens')})
-                if arm=='student_shuffled':
+                if arm=='student_shuffled' or arm.startswith('decode_') and arm.endswith('_shuffled'):
                     donor = bank['vec'][loc[r['shuffled_from_item_idx']]]
                     scores[arm]['donor_diagnostic'] = score_vectors(raw,donor,mean,W)
             result = {'item_idx':r['item_idx'],'stratum':r['stratum'],
