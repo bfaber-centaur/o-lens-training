@@ -13,10 +13,13 @@ import json
 import math
 import os
 import random
+import sys
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'oracle'))
 from train_distill_student import (
     PROMPT_TEMPLATE, load_targets, render_concepts_prompt, row, sha256
 )
