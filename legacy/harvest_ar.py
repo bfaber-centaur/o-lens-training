@@ -91,7 +91,6 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from safetensors import safe_open
 from safetensors.torch import save_file
 from tqdm.auto import tqdm
@@ -138,6 +137,10 @@ def parse_args():
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--cache-dir", default="/root/.cache/huggingface/hub")
 
+    p.add_argument("--exclude-rollouts", type=Path, action="append", default=[],
+                   help="Reject prompts from these existing rollout directories; hash-bound on resume")
+    p.add_argument("--dry-run", action="store_true", help="Validate exclusions/config without GPU or writes")
+    p.add_argument("--revision", help="Pinned model/tokenizer revision")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--data-note", default="")
 
@@ -205,7 +208,7 @@ def count_pairs(path: Path) -> int:
 
 
 def run_contract(args):
-    return {
+    contract = {
         "format_version": 3,
         "span_sampler": "v3_uniform_disjoint_guaranteed_fit",
         "model_id": args.model,
@@ -224,6 +227,13 @@ def run_contract(args):
         "span_max": args.span_max,
         "seed": args.seed,
     }
+
+    if getattr(args, "exclusion_hashes", None):
+        contract["exclude_rollout_sha256"] = args.exclusion_hashes
+        contract["prompt_exclusion_policy"] = "whitespace-normalized-sha256-v1"
+    if getattr(args, "revision", None):
+        contract["revision"] = args.revision
+    return contract
 
 
 def prepare_output(args):
@@ -278,7 +288,8 @@ def prepare_output(args):
         "safetensors": package_version("safetensors"),
         "accelerate": package_version("accelerate"),
     }
-    json_dump_atomic(env, root / "environment.json")
+    if not (root / "environment.json").exists():
+        json_dump_atomic(env, root / "environment.json")
 
     return root, pair_dir, rollout_dir, manifest_dir
 
@@ -421,6 +432,12 @@ def extract_user_prompt(row):
 
 
 def prompt_stream(args, tokenizer, used_keys):
+    from datasets import load_dataset
+    try:
+        from .harvest_exclusions import prompt_digest
+    except ImportError:
+        from harvest_exclusions import prompt_digest
+    normalized_seen = set(getattr(args, "excluded_prompt_digests", ()))
     dataset = load_dataset(
         args.dataset,
         split=args.dataset_split,
@@ -440,9 +457,12 @@ def prompt_stream(args, tokenizer, used_keys):
 
         key = prompt_key(prompt)
 
-        if key in seen or key in used_keys:
+        normalized = prompt_digest(prompt)
+        if key in seen or key in used_keys or normalized in normalized_seen:
             continue
         seen.add(key)
+        if getattr(args, "exclusion_hashes", None):
+            normalized_seen.add(normalized)
 
         ids = tokenizer(
             prompt,
@@ -1089,6 +1109,21 @@ def produce_one_shard(
 def main():
     args = parse_args()
 
+    try:
+        from .harvest_exclusions import rollout_inventory
+    except ImportError:
+        from harvest_exclusions import rollout_inventory
+    args.excluded_prompt_digests = set()
+    args.exclusion_hashes = {}
+    for directory in args.exclude_rollouts:
+        keys, hashes, _ = rollout_inventory(directory)
+        args.excluded_prompt_digests.update(keys)
+        args.exclusion_hashes.update(hashes)
+    if args.dry_run:
+        print(json.dumps({"contract":run_contract(args),
+            "excluded_prompts":len(args.excluded_prompt_digests),
+            "target_pairs":args.target_pairs}, indent=2))
+        return
     torch.cuda.set_device(args.gpu)
 
     cache_dir = Path(args.cache_dir)
@@ -1124,6 +1159,9 @@ def main():
         manifests,
     )
 
+    if manifests and args.exclude_rollouts:
+        keys, _, _ = rollout_inventory(rollout_dir)
+        args.excluded_prompt_digests.update(keys)
     next_shard_id = max(manifests, default=-1) + 1
 
     print(f"GPU: {torch.cuda.get_device_name(args.gpu)}")
@@ -1145,6 +1183,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model,
+        revision=args.revision,
         use_fast=True,
         cache_dir=args.cache_dir,
     )
@@ -1155,6 +1194,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
+        revision=args.revision,
         dtype=torch.bfloat16,
         device_map=args.gpu,
         cache_dir=args.cache_dir,
@@ -1175,6 +1215,10 @@ def main():
 
     env_path = root / "environment.json"
     env = json.loads(env_path.read_text(encoding="utf-8"))
+    revision = getattr(model.config, "_commit_hash", None)
+    if env.get("model_revision") and env["model_revision"] != revision:
+        raise ValueError("Model revision changed across harvest resume; pin --revision")
+    env["model_revision"] = revision
     env.update(
         {
             "gpu": torch.cuda.get_device_name(args.gpu),
@@ -1306,3 +1350,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

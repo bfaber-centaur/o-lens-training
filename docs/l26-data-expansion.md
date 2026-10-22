@@ -26,6 +26,15 @@ independent observations. This repeatedly inspected validation set supports
 iteration; it cannot certify generalization. An eventual independent test
 needs a historical exposure audit and its own frozen evaluation plan.
 
+## Capacity result and fresh harvest
+
+The original-corpus preflight found only 206 additional eligible training
+rollouts and 33 reservation rollouts. It wrote nothing. The 4,096 target
+therefore requires the [dedicated fresh harvest](l26-fresh-distill-harvest.md).
+The runner now passes `--fresh-data` and audits that harvest against the full
+original prompt inventory before selecting items. Original-only preparation
+remains available by invoking the Python command without `--fresh-data`.
+
 ## Expansion contract
 
 `prepare_distill_items.py --base-items ... --n-train 4096` preserves the old
@@ -50,6 +59,12 @@ checks source indices/vectors, target policies and expansion lineage. The
 trainer permits different train/validation bank hashes only after verifying
 this lineage, the preserved validation tensors, and rollout disjointness.
 
+The fresh route namespaces shard IDs above the original corpus maximum and
+pair-row IDs above the original corpus length; offsets and source hashes are
+stored in `fresh_corpus`. Those IDs are source references in the combined
+bank, not direct indices into the original corpus. It uses the whole new
+pool because none of it is used to train the frozen AR.
+
 ## RunPod execution
 
 Merge this PR and update `/root/o-lens-training`. If root was wiped, rebuild
@@ -61,6 +76,7 @@ models, environments and caches use `/root`.
 ```bash
 cd /root/o-lens-training
 set -euo pipefail
+# First complete scripts/harvest_l26_distill.sh as described in the fresh-harvest runbook.
 bash scripts/run_l26_data_expansion.sh preflight
 bash scripts/run_l26_data_expansion.sh prepare
 # Only if the ephemeral merged teacher does not already exist:

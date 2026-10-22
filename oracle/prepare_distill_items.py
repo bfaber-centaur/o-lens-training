@@ -99,9 +99,12 @@ def main():
     p.add_argument("--layer", type=int, default=26)
     p.add_argument("--model", default="Qwen/Qwen3.5-4B")
     p.add_argument("--base-items", type=Path, help="Append to this bank; retain its validation tensors exactly")
+    p.add_argument("--fresh-data", type=Path, help="Dedicated prompt-disjoint harvest; all new rollouts eligible")
     p.add_argument("--reserve-test", type=int, default=256)
     p.add_argument("--dry-run", action="store_true", help="Select and audit capacity without writing")
     args = p.parse_args()
+    if args.fresh_data and not args.base_items:
+        p.error("--fresh-data requires --base-items")
     if min(args.n_train, args.n_val) < 1 or args.output.exists():
         p.error("Need positive counts and a new output directory")
     if not (args.teacher / "COMPLETE").is_file():
@@ -120,6 +123,7 @@ def main():
         raise RuntimeError(f"Unexpected activation width: {corpus.d_model}")
     tokenizer = AutoTokenizer.from_pretrained(args.teacher/"tokenizer")
     old = None
+    fresh_audit = None
     if args.base_items:
         from distill_expansion import bank, groups
         base_meta, old = bank(args.base_items)
@@ -142,6 +146,10 @@ def main():
                     not torch.equal(corpus.activations[i], old[split + "_vec"][j]) or
                     not torch.equal(corpus.span_token_ids[lo:lo+n], old[split + "_ids"][j,:n])):
                     raise ValueError("Base bank no longer matches corpus")
+        if args.fresh_data:
+            from fresh_distill_corpus import load_fresh
+            corpus, fresh_audit = load_fresh(args.fresh_data, corpus, ns,
+                args.model, args.layer, teacher.get("revision"))
         selection, counts = choose_items(corpus, tokenizer, args.seed,
             args.n_train - len(old["train_vec"]), args.reserve_test,
             exclude=groups(old, "train") | groups(old, "val"))
@@ -149,7 +157,7 @@ def main():
     else:
         selection, counts = choose_items(corpus, tokenizer, args.seed, args.n_train, args.n_val)
     if args.dry_run:
-        print(json.dumps({"new_rows": {k:len(v) for k,v in selection.items()}, "counts":counts}))
+        print(json.dumps({"new_rows": {k:len(v) for k,v in selection.items()}, "counts":counts, "fresh_audit":fresh_audit}))
         return
     tensors = {}
     meta = {"schema":"gt_distill_items_v1","layer":args.layer,"model":args.model,
@@ -172,6 +180,12 @@ def main():
         tensors[split+"_shards"] = torch.tensor([row[1] for row in rows],dtype=torch.int32)
         tensors[split+"_rollouts"] = torch.tensor([row[2] for row in rows],dtype=torch.int32)
         meta[split+"_rows"] = len(rows)
+    if fresh_audit:
+        for split in selection:
+            tensors[split + "_pair_rows"] += fresh_audit["pair_row_offset"]
+        meta["fresh_corpus"] = fresh_audit
+        meta["source_partition"] = "original-prefix-plus-dedicated-fresh-harvest-v1"
+        meta["distill_partition"] = "fresh-rollout-hash-15pct-reserved-test-v1"
     if old is not None:
         from distill_expansion import digest
         for key, value in old.items():

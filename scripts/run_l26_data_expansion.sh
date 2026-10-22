@@ -11,6 +11,7 @@ BASE=$LAB/oracle/l26-distill-gt-items-v1
 OLD=$LAB/oracle/l26-bullets-train512-no-unigram-v1
 VAL=$LAB/oracle/l26-bullets-val64-no_unigram-v1
 SELECTION=$LAB/oracle/l26-vllm-nnomp-val64-v1
+FRESH_DATA=$LAB/data/l26-distill-fresh8192-v1
 ITEMS=$LAB/oracle/l26-distill-items4096-v1
 SAMPLES=$LAB/oracle/l26-teacher-extra3584-v1
 NNOMP=$LAB/oracle/l26-nnomp-extra3584-v1
@@ -23,7 +24,7 @@ export TMPDIR=/root/tmp
 mkdir -p "$TMPDIR"
 prepare=(oracle/prepare_distill_items.py --data "$LAB/data/olens_200k_all32"
   --teacher "$PARENT" --base-items "$BASE" --output "$ITEMS"
-  --n-train 4096 --reserve-test 256 --seed 42)
+  --n-train 4096 --reserve-test 256 --seed 42 --fresh-data "$FRESH_DATA")
 case "${1:-}" in
   preflight) "$PY" "${prepare[@]}" --dry-run ;;
   prepare) "$PY" "${prepare[@]}" ;;
