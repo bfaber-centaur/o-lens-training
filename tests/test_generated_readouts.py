@@ -139,9 +139,9 @@ class ScoringTests(unittest.TestCase):
             return torch.tensor([[1.,0.] if x['ids']==[1,1] else [0.,1.] for x in rows])
         rows = [{'item_idx':i,'target_row':i,'src_pair_row':i+10,'stratum':'low',
                  'shuffled_from_item_idx':1-i,'target':'- east',
-                 'outputs':{k:{'text':'- north' if k=='student_shuffled' else '- east',
+                 'outputs':{k:{'text':'- north' if k.endswith('_shuffled') else '- east',
                                'eos':False,'hit_cap':True,'tokens':3}
-                            for k in ('parent_shared','student_shared','student_shuffled')}} for i in range(2)]
+                            for k in ('parent_shared','student_shared','student_shuffled','decode_rep110_shuffled')}} for i in range(2)]
         bank = {'src_item_idx':torch.tensor([0,1]),'vec':torch.eye(2)}
         sel = {'rows':[{'item_idx':i,'omp_fve':.8} for i in range(2)]}
         args = argparse.Namespace(max_new_items=1,batch_size=4,ar_checkpoint=Path('/fake'))
@@ -158,6 +158,9 @@ class ScoringTests(unittest.TestCase):
             shuffled = report['rows'][0]['scores']['student_shuffled']
             self.assertEqual(shuffled['fve'],0)
             self.assertEqual(shuffled['donor_diagnostic']['fve'],1)
+            new_shuffled = report['rows'][0]['scores']['decode_rep110_shuffled']
+            self.assertEqual(new_shuffled['fve'],0)
+            self.assertEqual(new_shuffled['donor_diagnostic']['fve'],1)
             self.assertFalse((out/'COMPLETE').exists())
             first = (out/'item_000000.json').read_bytes()
             args.max_new_items = None
