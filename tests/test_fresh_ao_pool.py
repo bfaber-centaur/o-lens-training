@@ -46,6 +46,7 @@ class PoolTests(unittest.TestCase):
             self.pair(pair,list(range(1,65)))
             roll=Path(td)/"rollouts_0000.jsonl"
             roll.write_text(json.dumps({"rollout_id":1,"prompt":"hi"})+"\n")
-            with self.assertRaisesRegex(ValueError,"missing output_ids"):
+            with self.assertRaisesRegex(ValueError,r"missing (assistant_ids/)?output_ids"):
                 mod.create_pool([roll],[pair],FakeTokenizer())
 if __name__=="__main__": unittest.main()
+

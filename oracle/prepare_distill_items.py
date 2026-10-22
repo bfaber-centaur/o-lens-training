@@ -47,13 +47,13 @@ def partition(shard, rollout, seed, val_frac):
     return "val" if u < val_frac else "train"
 
 
-def choose_items(corpus, tok, seed, n_train, n_val, val_frac=0.15, max_span=64):
+def choose_items(corpus, tok, seed, n_train, n_val, val_frac=0.15, max_span=64, exclude=()):
     rng = random.Random(seed)
     groups = {}
     for i in corpus.val_indices.tolist():
         key = (int(corpus.shard_ids[i]), int(corpus.rollout_ids[i]))
         groups.setdefault(key, []).append(i)
-    keys = sorted(groups)
+    keys = sorted(set(groups) - set(exclude))
     rng.shuffle(keys)
     selection = {"train": [], "val": []}
     counts = {"groups": len(keys), "rejected_degenerate": 0,
@@ -98,6 +98,9 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--layer", type=int, default=26)
     p.add_argument("--model", default="Qwen/Qwen3.5-4B")
+    p.add_argument("--base-items", type=Path, help="Append to this bank; retain its validation tensors exactly")
+    p.add_argument("--reserve-test", type=int, default=256)
+    p.add_argument("--dry-run", action="store_true", help="Select and audit capacity without writing")
     args = p.parse_args()
     if min(args.n_train, args.n_val) < 1 or args.output.exists():
         p.error("Need positive counts and a new output directory")
@@ -116,7 +119,38 @@ def main():
     if corpus.d_model != 2560:
         raise RuntimeError(f"Unexpected activation width: {corpus.d_model}")
     tokenizer = AutoTokenizer.from_pretrained(args.teacher/"tokenizer")
-    selection, counts = choose_items(corpus, tokenizer, args.seed, args.n_train, args.n_val)
+    old = None
+    if args.base_items:
+        from distill_expansion import bank, groups
+        base_meta, old = bank(args.base_items)
+        if base_meta.get("schema") != "gt_distill_items_v1" or base_meta.get("expansion"):
+            raise ValueError("Expected original pilot bank, not a nested expansion")
+        if args.seed != base_meta["seed"]:
+            raise ValueError("Preserve original partition seed")
+        if any(base_meta[k] != v for k, v in (("model", args.model), ("layer", args.layer), ("teacher", str(args.teacher)))):
+            raise ValueError("Base bank teacher/model mismatch")
+        if args.n_train <= len(old["train_vec"]) or args.reserve_test < 1:
+            raise ValueError("Expansion needs more training items and a positive reservation")
+        # Verify row IDs still refer to exactly the same corpus, not a reordered harvest.
+        for split in ("train", "val"):
+            for j, i in enumerate(old[split + "_pair_rows"].tolist()):
+                lo = int(corpus.span_offsets[i])
+                n = int(old[split + "_lengths"][j])
+                if (not bool(corpus.is_val[i]) or
+                    int(corpus.shard_ids[i]) != int(old[split + "_shards"][j]) or
+                    int(corpus.rollout_ids[i]) != int(old[split + "_rollouts"][j]) or
+                    not torch.equal(corpus.activations[i], old[split + "_vec"][j]) or
+                    not torch.equal(corpus.span_token_ids[lo:lo+n], old[split + "_ids"][j,:n])):
+                    raise ValueError("Base bank no longer matches corpus")
+        selection, counts = choose_items(corpus, tokenizer, args.seed,
+            args.n_train - len(old["train_vec"]), args.reserve_test,
+            exclude=groups(old, "train") | groups(old, "val"))
+        selection["test"] = selection.pop("val")
+    else:
+        selection, counts = choose_items(corpus, tokenizer, args.seed, args.n_train, args.n_val)
+    if args.dry_run:
+        print(json.dumps({"new_rows": {k:len(v) for k,v in selection.items()}, "counts":counts}))
+        return
     tensors = {}
     meta = {"schema":"gt_distill_items_v1","layer":args.layer,"model":args.model,
             "teacher":str(args.teacher),"teacher_alpha":float(teacher["alpha"]),
@@ -138,6 +172,17 @@ def main():
         tensors[split+"_shards"] = torch.tensor([row[1] for row in rows],dtype=torch.int32)
         tensors[split+"_rollouts"] = torch.tensor([row[2] for row in rows],dtype=torch.int32)
         meta[split+"_rows"] = len(rows)
+    if old is not None:
+        from distill_expansion import digest
+        for key, value in old.items():
+            tensors[key] = torch.cat((value, tensors[key]), dim=0) if key.startswith("train_") else value.clone()
+        meta["train_rows"] = len(tensors["train_vec"])
+        meta["val_rows"] = len(tensors["val_vec"])
+        meta["expansion"] = {"base_items":str(args.base_items.resolve()),
+            "base_sha256":base_meta["items_sha256"],
+            "original_train_rows":len(old["train_vec"]),
+            "reservation":"Prospective only; historical AO exposure not audited"}
+        meta["corpus_sha256"] = {str(p):digest(p) for p in corpus.pair_paths + corpus.rollout_paths}
     args.output.mkdir(parents=True)
     file = args.output/"items.safetensors"
     save_file(tensors,str(file))
@@ -149,3 +194,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
