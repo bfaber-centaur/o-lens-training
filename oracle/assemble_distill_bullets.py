@@ -165,6 +165,7 @@ def main():
               "upstream original: 1-, 2-, or 3-gram repeats >=3 times"
               if a.filter_policy == "upstream"
               else "exploratory no-unigram: only 2-/3-gram repeats >=3 times"),
+          "items_path":str(a.items.resolve()),
           "selection_sha256":digest(sel_path),"items_sha256":info["items_sha256"],
           "ar_checkpoint":selection["ar_checkpoint"],
           "input_rows":len(audit),"kept_rows":len(rows),
@@ -199,3 +200,4 @@ def main():
 
 if __name__=="__main__":
     main()
+

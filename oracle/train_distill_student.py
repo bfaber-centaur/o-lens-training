@@ -146,9 +146,17 @@ def verified_contract(train_path, val_path, parent_path):
     for meta in (train_meta, val_meta):
         if (meta["model"] != parent_meta["model"]
             or meta["layer"] != parent_meta["layer"]
-            or Path(meta["teacher"]).resolve() != parent_path.resolve()
-            or meta["items_sha256"] != train_meta["items_sha256"]):
+            or Path(meta["teacher"]).resolve() != parent_path.resolve()):
             raise ValueError("Target/parent mismatch")
+    if train_meta["items_sha256"] != val_meta["items_sha256"]:
+        try:
+            from .distill_expansion import verify_expansion, verify_targets
+        except ImportError:
+            from distill_expansion import verify_expansion, verify_targets
+        _, expanded, original = verify_expansion(train_meta["items_path"],
+            train_meta["items_sha256"], val_meta["items_sha256"])
+        verify_targets(train_meta, train, expanded, "train")
+        verify_targets(val_meta, val, original, "val")
     if set(int(v) for v in train["src_pair_row"]).intersection(
         int(v) for v in val["src_pair_row"]):
         raise ValueError("Train/validation source pair rows overlap")
@@ -347,3 +355,4 @@ def main():
 
 if __name__=="__main__":
     main()
+
