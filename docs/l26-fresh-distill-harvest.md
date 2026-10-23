@@ -122,3 +122,40 @@ bash scripts/run_l26_data_expansion.sh prepare
 Expected: 32 committed shards (0–31), 8,432 pairs. No manifest reconstruction
 or harvest rerun is needed for this observed incident. The existing preparation
 checks still validate pair counts and reject unexplained extra data files.
+
+## Repeated direct-read failures: stage locally before preparation
+
+After the listing fix, preparation still intermittently could not read shard
+00004, while five repeated reads on the same host/interpreter all succeeded.
+The source is not reliably visible to this workflow. Avoid repeated full
+preparation attempts: create a verified local snapshot first. Keep harvesting
+stopped throughout this operation.
+
+```bash
+cd /root/o-lens-training
+python3 scripts/stage_fresh_harvest.py \
+  --source /workspace/o-lens-qwen35-4b/data/l26-distill-fresh8192-v1 \
+  --output /root/olens-data/l26-distill-fresh8192-v1
+cp /root/olens-data/l26-distill-fresh8192-v1/snapshot.json \
+  /workspace/o-lens-qwen35-4b/oracle/l26-fresh-staging-receipt.json
+OLENS_FRESH_DATA=/root/olens-data/l26-distill-fresh8192-v1 \
+  bash scripts/run_l26_data_expansion.sh prepare
+```
+
+Staging uses exact paths derived from the saved shard count and manifests;
+it never lists or mutates the source directory. Missing-file reads receive
+five attempts with two seconds between attempts. Every copied file must match
+an independent source read and local readback. It checks activation row counts
+from safetensors headers, actual rollout/token counts, and aggregate counts
+and span histograms against progress. Normal preparation still performs the
+full safetensors, prompt-disjointness, and lineage checks.
+
+Expect 32 verified shards and 8,432 pairs. Staging refuses an existing output
+and only writes `STAGED_COMPLETE` after success. On failure, inspect the error;
+retry with a new local output path instead of deleting source files or reusing
+a partial snapshot. A staged snapshot is a local working copy, not a durable
+replacement for the harvest. Preparation verifies its file hashes, records
+its persistent source and receipt hash, and writes the completed item bank
+to the original `/workspace/.../oracle/l26-distill-items4096-v1` destination.
+The original corpus still loads from its existing persistent path; if its
+checks fail, investigate that separately without relaxing exclusions.

@@ -41,4 +41,17 @@ def load_fresh(root, original, ns, model, layer, revision=None):
         config_sha256=file_digest(root/'run_config.json'),
         model_revision=env.get('model_revision'),
         original_pair_sha256={str(p):file_digest(p) for p in original.pair_paths})
+    snapshot = root / 'snapshot.json'
+    if snapshot.is_file():
+        info = json.loads(snapshot.read_text())
+        if not (root / 'STAGED_COMPLETE').is_file():
+            raise ValueError('Local snapshot is incomplete')
+        for relative, expected in info['files_sha256'].items():
+            path = Path(relative)
+            if path.is_absolute() or '..' in path.parts:
+                raise ValueError('Invalid staged snapshot path')
+            if file_digest(root/path) != expected:
+                raise ValueError('Staged snapshot changed: ' + relative)
+        audit['staging_snapshot_sha256'] = file_digest(snapshot)
+        audit['persistent_source'] = info['source']
     return corpus, audit
