@@ -96,6 +96,11 @@ from safetensors.torch import save_file
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+try:
+    from .harvest_manifests import scan_manifests, cleanup_unmarked_files
+except ImportError:
+    from harvest_manifests import scan_manifests, cleanup_unmarked_files
+
 
 PAIR_RE = re.compile(r"pairs_l(?P<layer>\d+)_(?P<shard>\d{5})\.safetensors$")
 ROLLOUT_RE = re.compile(r"rollouts_(?P<shard>\d{5})\.jsonl$")
@@ -294,46 +299,6 @@ def prepare_output(args):
     return root, pair_dir, rollout_dir, manifest_dir
 
 
-def scan_manifests(manifest_dir: Path):
-    manifests = {}
-    for path in sorted(manifest_dir.glob("shard_*.json")):
-        m = MANIFEST_RE.match(path.name)
-        if not m:
-            continue
-        sid = int(m.group("shard"))
-        manifests[sid] = json.loads(path.read_text(encoding="utf-8"))
-    return manifests
-
-
-def cleanup_unmarked_files(pair_dir, rollout_dir, manifest_dir, layers):
-    complete = set(scan_manifests(manifest_dir))
-
-    for directory in (pair_dir, rollout_dir, manifest_dir):
-        for p in directory.glob("*.tmp"):
-            print(f"removing stale temp: {p}")
-            p.unlink(missing_ok=True)
-
-    found_ids = set()
-
-    for p in pair_dir.glob("pairs_l*_*.safetensors"):
-        m = PAIR_RE.match(p.name)
-        if m:
-            found_ids.add(int(m.group("shard")))
-
-    for p in rollout_dir.glob("rollouts_*.jsonl"):
-        m = ROLLOUT_RE.match(p.name)
-        if m:
-            found_ids.add(int(m.group("shard")))
-
-    for sid in sorted(found_ids - complete):
-        print(f"removing uncommitted shard {sid:05d}")
-        for layer in layers:
-            (pair_dir / f"pairs_l{layer}_{sid:05d}.safetensors").unlink(
-                missing_ok=True
-            )
-        (rollout_dir / f"rollouts_{sid:05d}.jsonl").unlink(
-            missing_ok=True
-        )
 
 
 def validate_completed_shards(pair_dir, rollout_dir, manifest_dir, layers):

@@ -87,3 +87,38 @@ rejections can require more responses. Actual runtime depends on response
 length and the hybrid-model kernels. Use the smoke's observed throughput to
 estimate cost. Teacher candidate generation remains a separate, subsequent
 229,376-continuation job; the harvest command does not start it.
+
+## 2026-10-23: readable manifests omitted from FUSE listings
+
+The completed harvest reported 8,432 pairs, 8,602 rollouts, 7,544,719 output
+tokens and 32 shards. A subsequent manifest directory listing showed only 30:
+shards 00004 and 00007 were absent, although direct reads of both JSON files
+succeeded. Their data files were present. This is an observed listing/read
+discrepancy, not evidence that those shards need regeneration.
+
+Manifest discovery now combines directory names with the saved progress count
+and directly reads the expected commit paths. Progress is only a discovery
+hint: it cannot replace a missing or malformed manifest. Cleanup rechecks a
+candidate's manifest directly before deleting any uncommitted data. If saved
+progress claims a committed shard whose manifest cannot be read, cleanup
+stops without removing that shard.
+
+After pulling the fix, verify discovery without loading the model:
+
+```bash
+cd /root/o-lens-training
+python3 - <<'PY'
+from pathlib import Path
+from legacy.harvest_manifests import scan_manifests
+root = Path('/workspace/o-lens-qwen35-4b/data/l26-distill-fresh8192-v1')
+records = scan_manifests(root/'manifests')
+print('Committed shards:', len(records), sorted(records))
+print('Pairs:', sum(m['pairs'] for m in records.values()))
+PY
+bash scripts/run_l26_data_expansion.sh preflight
+bash scripts/run_l26_data_expansion.sh prepare
+```
+
+Expected: 32 committed shards (0–31), 8,432 pairs. No manifest reconstruction
+or harvest rerun is needed for this observed incident. The existing preparation
+checks still validate pair counts and reject unexplained extra data files.
