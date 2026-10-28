@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Precompute frozen L26 AR outputs for fresh AO token-id crops."""
+"""Precompute frozen single-layer AR outputs for fresh AO token-id crops."""
 import argparse
 import hashlib
 import json
@@ -28,6 +28,7 @@ def main():
     p.add_argument("--checkpoint",type=Path,required=True)
     p.add_argument("--output",type=Path,required=True)
     p.add_argument("--batch-size",type=int,default=16)
+    p.add_argument("--layer",type=int,default=26)
     a=p.parse_args()
     if a.output.exists():p.error("Output already exists")
     if not (a.pool/"COMPLETE").is_file() or not (a.checkpoint/"COMPLETE").is_file():
@@ -38,13 +39,15 @@ def main():
         p.error("Pool checksum mismatch")
     if meta["format"]!="fresh_ao_pool_v1":p.error("Unrecognized pool contract")
     cfg=json.loads((a.checkpoint/"run_config.json").read_text())
-    if cfg["target_layer"]!=26 or cfg["model_id"]!=meta["model"]:
+    if cfg["target_layer"]!=a.layer or cfg["model_id"]!=meta["model"]:
         p.error("AR checkpoint model or layer mismatch")
+    if meta.get("layer",26)!=a.layer:
+        p.error("AO pool exclusion layer mismatch")
     tensors=load_file(str(artifact))
     tokenizer=AutoTokenizer.from_pretrained(meta["model"])
     if tokenizer.pad_token_id is None: tokenizer.pad_token=tokenizer.eos_token
-    tag=torch.tensor(tokenizer("[Layer 26]",add_special_tokens=False).input_ids,dtype=torch.long)
-    args=argparse.Namespace(model=meta["model"],gpu=0,layer=26,
+    tag=torch.tensor(tokenizer(f"[Layer {a.layer:02d}]",add_special_tokens=False).input_ids,dtype=torch.long)
+    args=argparse.Namespace(model=meta["model"],gpu=0,layer=a.layer,
             cache_dir="/root/.cache/huggingface/hub",lora_r=16,lora_alpha=32,lora_dropout=.05)
     ar=build_ar(args,tokenizer,torch.zeros(2560),2560,torch.device("cuda"),a.checkpoint).eval()
     out={}
@@ -60,9 +63,11 @@ def main():
     a.output.mkdir(parents=True)
     fn=a.output/"arout.safetensors"
     save_file(out,str(fn))
-    result={"format":"fresh_ao_arout_v1","model":meta["model"],"layer":26,
+    result={"format":"fresh_ao_arout_v1","model":meta["model"],"layer":a.layer,
             "pool":str(a.pool),"pool_sha256":meta["pool_sha256"],
             "checkpoint":str(a.checkpoint),
+            "checkpoint_sha256":{str(x.relative_to(a.checkpoint)):hashlib.sha256(x.read_bytes()).hexdigest()
+                for x in sorted(a.checkpoint.rglob("*")) if x.is_file() and x.name != "state.pt"},
             "arout_sha256":hashlib.sha256(fn.read_bytes()).hexdigest(),
             "train_rows":len(out["train"]),"val_rows":len(out["val"])}
     (a.output/"meta.json").write_text(json.dumps(result,indent=2)+"\n")

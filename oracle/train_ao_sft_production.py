@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable L26 AR-output supervised inversion, before distillation/RL.
+"""Resumable single-layer AR-output supervised inversion, before distillation/RL.
 
 Scientific scope: frozen AR(span) vectors -> original text span.
 This is AO-1 style AR-output inversion, not distillation or RL.
@@ -124,6 +124,8 @@ def main():
     armeta = json.loads((args.arout / "meta.json").read_text())
     if pool_meta.get("format") != "fresh_ao_pool_v1" or armeta.get("format") != "fresh_ao_arout_v1":
         ap.error("Production AO SFT requires fresh pool format; pilot cache prohibited")
+    if pool_meta.get("layer", 26) != args.layer:
+        ap.error("AO pool exclusion layer mismatch")
     if pool_meta["model"] != args.model or armeta["model"] != args.model or armeta["layer"] != args.layer:
         ap.error("Model/layer mismatch")
     if armeta["pool_sha256"] != pool_meta["pool_sha256"] or Path(armeta["pool"]).resolve() != args.pool.resolve():
@@ -179,7 +181,7 @@ def main():
     val_ds = FreshDataset("val")
     val_loader = DataLoader(val_ds,batch_size=args.batch_size,shuffle=False,collate_fn=collator)
     optim = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
-    meta = dict(stage="l26_ao_sft_fresh_pool_v1", layer=args.layer, model=args.model,
+    meta = dict(stage=f"l{args.layer}_ao_sft_fresh_pool_v1", layer=args.layer, model=args.model,
                 pool_source=str(args.pool), pool_sha256=pool_meta["pool_sha256"],
                 arout_source=str(args.arout), arout_sha256=armeta["arout_sha256"],
                 ar_checkpoint=armeta["checkpoint"],
