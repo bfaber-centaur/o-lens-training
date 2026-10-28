@@ -134,7 +134,7 @@ def generate(a):
     manifest = json.loads(json.dumps(manifest))
     contract = row_hash(manifest)
     if a.dry_run:
-        print(json.dumps({'items':len(originals),'new_generations':len(originals)*len(PROFILES)*2,
+        print(json.dumps({'items':len(originals),'new_generations':len(originals)*len(PROFILES)*len(CONDITIONS),
                           'contract':contract,'profiles':PROFILES},indent=2))
         return
     existed = out.exists()
