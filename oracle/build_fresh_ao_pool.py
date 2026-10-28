@@ -86,17 +86,28 @@ def main():
     p.add_argument("--output",type=Path,required=True)
     p.add_argument("--model",default="Qwen/Qwen3.5-4B")
     p.add_argument("--seed",type=int,default=42)
+    p.add_argument("--layer",type=int,default=26)
+    p.add_argument("--source-config",type=Path,help="AR run_config: exact shard inventory")
     a=p.parse_args()
     if a.output.exists():p.error("Output already exists")
     rolls=sorted(a.rollout_dir.glob("rollouts_*.jsonl"))
-    pairs=sorted(a.pairs_dir.glob("pairs_l26_*.safetensors"))
-    if not rolls or not pairs:p.error("Missing rollout or L26 pair shards")
+    pairs=sorted(a.pairs_dir.glob(f"pairs_l{a.layer}_*.safetensors"))
+    if a.source_config:
+        cfg=json.loads(a.source_config.read_text())
+        if cfg["target_layer"]!=a.layer or cfg["model_id"]!=a.model:
+            p.error("Source configuration model/layer mismatch")
+        rolls=[a.rollout_dir/name for name in cfg["rollout_shards"]]
+        pairs=[a.pairs_dir/name for name in cfg["pair_shards"]]
+        for path in rolls+pairs:
+            with path.open("rb") as stream:
+                stream.read(1)
+    if not rolls or not pairs:p.error("Missing rollout or requested-layer pair shards")
     tokenizer=AutoTokenizer.from_pretrained(a.model)
     records,stats=create_pool(rolls,pairs,tokenizer,a.seed)
     a.output.mkdir(parents=True)
     tensors={}
     meta={"format":"fresh_ao_pool_v1","seed":a.seed,"model":a.model,"lengths":LENGTHS,
-          "window":64,"max_per_conversation":4,"counts":stats,
+          "layer":a.layer,"window":64,"max_per_conversation":4,"counts":stats,
           "source_rollouts":[x.name for x in rolls],"source_pairs":[x.name for x in pairs]}
     for split,crops in records.items():
         padded=torch.zeros((len(crops),64),dtype=torch.int32)
